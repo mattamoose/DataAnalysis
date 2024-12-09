@@ -55,71 +55,94 @@ freq_days = dom_freq*60*24;
 fprintf(' \n \n The dominant frequency of PM2.5 is %4.5f cycles/day \n',freq_days)
 
 fprintf('Or a period of %4.2f days \n',1/freq_days)
-%% Band-Pass Filter
 
-band = [dom_freq-1e-5*df/n,dom_freq+1e-5*df/n];
- 
-f_bd = fir1(20,band,'bandpass');
-
-y_l = filter(f_bd,1,y);
-figure(6)
-plot(t,y_l)
-title('Band Pass Filtered Series')
-
-[f,Py_l] = psd(n,df,y_l);
-figure(4)
-hold on
-plot(f,Py_l)
-title('PSD of Band-Pass Filter')
-xscale('log')
-legend('Psd unfiltered','psd filtered')
-
-ex = mean(y_l);
-fprintf(' \n The mean contribution is %8.8f',ex)
 
 %% Isolate Commuter traffic band
 
-bandc = 1./[13,9]/60; % cycles/min
-f_bc = fir1(20,bandc,'bandpass');
+bandc = 1./[14,8]/60; % cycles/min
 
-y_c = filter(f_bc,1,y);
+% f_bc = fir1(20,bandc,'bandpass');
+% 
+% y_c = filter(f_bc,1,y);
+% 
+% Pyy(f < bandc(1)) = 0; Pyy(f > bandc(2));
+% yc = invpsd(n,Pyy,'symmetric');
+% I = (yc>30);
+% yc(I) = [];
+% tc = t; tc(I) = [];
+% 
+% figure(7)
+% plot(tc,yc)
+% hold on
+% plot(t,y_c)
+% legend('Crude','FIR')
+% title('Commuter Band Pass')
+% 
+% cc = mean(yc);
+% 
+% fprintf('\n The mean contribution from commuter traffic is %8.8f',cc)
+% 
+% figure(8)
+% 
+% plot(f,Pyy)
+% hold on
+% [f,pyyc] = psd(n,df,y_c);
+% plot(f,pyyc)
+% xscale('log')
+% legend('Psd unfiltered','psd filtered')
 
-Pyy(f < bandc(1)) = 0; Pyy(f > bandc(2));
-yc = invpsd(n,Pyy,'symmetric');
-I = (yc>30);
-yc(I) = [];
-tc = t; tc(I) = [];
+[Pyy2,f_iso] = freqbuild(Pyy,32,f,2);
 
-figure(7)
-plot(tc,yc)
+fiso_srt = sort(f_iso);
+[M, f_ind] = vand(fiso_srt,t);
+coeff = M\y;
+
+b = regress(y,M);
+ym = M*b;
+resid = y - ym;
+
+% SE = std(bootstrp(1000,@(bootr)regress(ym+bootr,M),resid));
+% 
+% CI = bootci(1000,{@(bootr)regress(ym+bootr,M),resid},'type','normal');
+
+f_lp = fir1(20,max(f_iso)+0*df/n,"low");
+y_flp = filter(f_lp,1,y);
+
+p = chi2gof(resid,'Alpha',0.05);
+
+
+figure(5)
+plot(t,y_flp)
 hold on
-plot(t,y_c)
-legend('Crude','FIR')
-title('Commuter Band Pass')
+plot(t,M*coeff)
+legend('lp filtered','20-Dom freq regress')
 
-cc = mean(yc);
-
-fprintf('\n The mean contribution from commuter traffic is %8.8f',cc)
-
-figure(8)
-
-plot(f,Pyy)
+figure(4)
 hold on
-[f,pyyc] = psd(n,df,y_c);
-plot(f,pyyc)
-xscale('log')
-legend('Psd unfiltered','psd filtered')
+plot(f,Pyy2)
+set(gca,'XScale','log')
+legend('PSD', 'Reduced PSD')
 
-figure(9)
+figure(6)
+y_dom = b(1)*sin(f_iso(1)*2*pi*t') + b(2)*cos(f_iso(1)*2*pi*t');
+plot(t,y_dom)
+hold on
+plot(t,y_flp)
+% figure(9)
+% 
+% spectrogram(y_c)
 
-spectrogram(y_c)
-
-figure(10)
-cwt(y_c)
+% figure(10)
+% cwt(y_c)
 figure(11)
 cwt(y)
 
 figure(12)
+tiledlayout (1,2)
+histogram(resid)
+probplot(resid)
+
+
 [ps,fp] = periodogram(y,[],[],df);
 dom = fp(ps == max(ps))*60*24;
 fprintf('\nUsing periodogram, the dominant frequency has a period of %4.4f',1/dom)
@@ -135,5 +158,62 @@ end
 function [yr] = invpsd(n,Poa,invtype)
     Pxx = [sqrt(Poa(1)*n); sqrt(Poa(2:end)/2*n); sqrt(fliplr(conj(Poa(2:end)/2*n)))];
     yr = ifft(Pxx,n,invtype);
+
+end
+
+
+function [pxx,omegas] = freqbuild(Pxx,n,f,ndf)
+   omegas = NaN(n,1);
+   df = f(2) - f(1);
+   for ii = 1:n
+       fnan = NaN(size(f));
+       index = ((Pxx == max(Pxx)) == 1);
+       jj = find(index);
+       omegas(ii) = f(index);
+       if jj - ndf <= 0
+            a = 1;
+            b = jj + ndf;
+            s1 = ndf - abs(jj -ndf -1);
+            s2 = ndf;
+       elseif jj + ndf > numel(f)
+            a = jj - ndf;
+            b = numel(f);
+            s2 = ndf - (jj +ndf -numel(f));
+            s1 = ndf;
+       else 
+           a = jj -ndf;
+           b = jj + ndf;
+           s1 = ndf;
+           s2 = ndf;
+       end
+       fspan = f(index) - s1*df:df: f(index) + s2*df;
+       fnan(1,(a:b)) = fspan;
+       Pxx(f == fnan) = 0;
+   end
+   pxx = Pxx;    
+
+end
+
+
+function [V,identity] = vand(f,t)
+        SIN = @(w,t) sin(w*t);
+        COS = @(w,t) cos(w*t);
+        
+        S = NaN(1,numel(f));
+        C = NaN(size(S));
+        
+        fr = f*2*pi;
+
+        V = NaN(numel(t),(2*numel(f)));
+        % V(:,2) = t';
+        identity = NaN(size(V,2),1);
+        for ii = 1:numel(f)
+           S = SIN(fr(ii),t');
+           C = COS(fr(ii),t');
+           V(:,(2*ii - 1 :2*ii)) = [S, C];
+           identity((2*ii-1:2*ii)) = [f(ii);f(ii)];
+        end
+        
+        
 
 end

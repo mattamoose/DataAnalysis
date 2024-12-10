@@ -1,8 +1,9 @@
-clc; close all; clear  
+clc; close all;
 
 data = readtable('146400-09-25-11-25.csv');
 
 chA = table2array(data(:,2)); chB = table2array(data(:,3));
+time_0 = datetime([2024,9,25,0,1,0]);
 s = '';
 %%
 %Data Span 9/25 00:01 - 11/24 23:59  
@@ -43,6 +44,7 @@ plot(t,y)
 title('Detrended Data Set')
 dty = mean(y);
 fprintf('\n The mean of the detrended data set = %8.8f',dty)
+
 figure(4)
 
 [f,Pyy] = psd(n,df,y);
@@ -51,6 +53,7 @@ plot(f,Pyy)
 xscale('log')
 
 dom_freq = f(Pyy == max(Pyy));
+fprintf('\n The dominant frequency is %6.6f Hz \n',dom_freq)
 freq_days = dom_freq*60*24;
 fprintf(' \n \n The dominant frequency of PM2.5 is %4.5f cycles/day \n',freq_days)
 
@@ -61,73 +64,100 @@ fprintf('Or a period of %4.2f days \n',1/freq_days)
 
 bandc = 1./[14,8]/60; % cycles/min
 
-% f_bc = fir1(20,bandc,'bandpass');
-% 
-% y_c = filter(f_bc,1,y);
-% 
-% Pyy(f < bandc(1)) = 0; Pyy(f > bandc(2));
-% yc = invpsd(n,Pyy,'symmetric');
-% I = (yc>30);
-% yc(I) = [];
-% tc = t; tc(I) = [];
-% 
-% figure(7)
-% plot(tc,yc)
-% hold on
-% plot(t,y_c)
-% legend('Crude','FIR')
-% title('Commuter Band Pass')
-% 
-% cc = mean(yc);
-% 
-% fprintf('\n The mean contribution from commuter traffic is %8.8f',cc)
-% 
-% figure(8)
-% 
-% plot(f,Pyy)
-% hold on
-% [f,pyyc] = psd(n,df,y_c);
-% plot(f,pyyc)
-% xscale('log')
-% legend('Psd unfiltered','psd filtered')
-
-[Pyy2,f_iso] = freqbuild(Pyy,32,f,2);
+[Pyy2,f_iso] = freqbuild(Pyy,30,f,2);
 
 fiso_srt = sort(f_iso);
-[M, f_ind] = vand(fiso_srt,t);
-coeff = M\y;
 
-b = regress(y,M);
+f_lp = fir1(50,max(f_iso)+0*df/n,"low");
+y_flp = filter(f_lp,1,y);
+fprintf('\n Mean of Filtered Data set: %6.5f',mean(y_flp))
+
+%y_flp = y_flp - mean(y_flp);
+
+[M, f_ind] = vand(fiso_srt,t);
+coeff = M\y_flp;
+
+b = regress(y_flp,M);
 ym = M*b;
-resid = y - ym;
+resid = y_flp - ym;
 
 % SE = std(bootstrp(1000,@(bootr)regress(ym+bootr,M),resid));
 % 
 % CI = bootci(1000,{@(bootr)regress(ym+bootr,M),resid},'type','normal');
 
-f_lp = fir1(20,max(f_iso)+0*df/n,"low");
-y_flp = filter(f_lp,1,y);
+pCHI2 = chi2gof(resid,'Alpha',0.05);
+pZ = ztest(resid,mean(resid),std(resid));
 
-p = chi2gof(resid,'Alpha',0.05);
-
+bmin = b - CI(1,:)';
+bmax = b + CI(2,:)';
 
 figure(5)
+errorbar(1:numel(b),b,bmin,bmax)
+
+
+
+figure(6)
 plot(t,y_flp)
 hold on
 plot(t,M*coeff)
-legend('lp filtered','20-Dom freq regress')
+xlabel('time (minutes)')
+ylabel('Mass Concentration (ug/m^3)')
 
-figure(4)
-hold on
-plot(f,Pyy2)
-set(gca,'XScale','log')
-legend('PSD', 'Reduced PSD')
+sat = datetime([2024,9,27,6,0,0]);
+sun = datetime([2024,9,29,23,0,0]);
 
-figure(6)
-y_dom = b(1)*sin(f_iso(1)*2*pi*t') + b(2)*cos(f_iso(1)*2*pi*t');
-plot(t,y_dom)
+t_0 = minutes(sat - time_0);
+t_f = minutes(sun - sat);
+dwend = 7*24*60; %minutes/week
+
+day = sat;
+X = [t_0, t_0, t_0 + t_f, t_0 + t_f]; Y = [-20 50 50 -20];
+while day < datetime([2024,11,25,0,0,0])
+    patch(X,Y,'g',FaceAlpha=0.2)
+    X = X + dwend;
+    day = day + minutes(dwend);
+end
+
+times = [9190,16630,18910,21560,26890,60150,64028,75294,78792,83116,84602,];
+times = minutes(times);
+hi_resid = time_0 + times;
+
+fprintf('\n\n Dates of High Residuals from the frequency analysis:\n')
+disp(hi_resid)
+
+figure(7)
+plot(t,resid,'r')
+xlabel('time (minutes)')
+ylabel('Residual (ug/m^3)')
 hold on
-plot(t,y_flp)
+day = sat;
+X = [t_0, t_0, t_0 + t_f, t_0 + t_f]; Y = [-20 50 50 -20];
+while day < datetime([2024,11,25,0,0,0])
+    patch(X,Y,'g',FaceAlpha=0.05)
+    X = X + dwend;
+    day = day + minutes(dwend);
+end
+ts11 = minutes(datetime([2024,10,6,0,0,0]) - time_0);   % Definitely Elk Fire
+ts12 = minutes(datetime([2024,10,10,9,59,59]) -time_0);
+Xs = [ts11, ts11, ts12, ts12];
+patch(Xs,Y,[0.7 0.7 0.7],FaceAlpha = 0.3)
+
+tw11 = minutes(datetime([2024,11,18,12,0,0]) - time_0); % Steady winds around 20 mph gusts to 35 mph.
+tw12 = minutes(datetime([2024,11,18,21,0,0]) - time_0);
+Xw = [tw11 tw11 tw12 tw12]; 
+patch(Xw,Y,'b',FaceAlpha = 0.2)
+
+tws11 = minutes(datetime([2024,9,30,21,0,0])-time_0);
+tws12 = minutes(datetime([2024,10,2,23,59,59]) - time_0); % Elk Fire end of period of southern winds.
+
+Xws = [tws11 tws11 tws12 tws12];
+patch(Xws,Y,[0.7 0.7 0.7],FaceAlpha = 0.3)
+
+% figure(6)
+% y_dom = b(1)*sin(f_iso(1)*2*pi*t') + b(2)*cos(f_iso(1)*2*pi*t');
+% plot(t,y_dom)
+% hold on
+% plot(t,y_flp)
 % figure(9)
 % 
 % spectrogram(y_c)
@@ -135,11 +165,24 @@ plot(t,y_flp)
 % figure(10)
 % cwt(y_c)
 figure(11)
-cwt(y)
+
+[cfs,fw] = cwt(y_flp,df/60);
+imagesc(t,fliplr(fw),abs(cfs))
+hold on
+yyaxis right
+day = sat;
+X = [t_0, t_0, t_0 + t_f, t_0 + t_f]; Y = [-20 50 50 -20];
+while day < datetime([2024,11,25,0,0,0])
+    patch(X,Y,'r',FaceAlpha=0.01)
+    X = X + dwend;
+    day = day + minutes(dwend);
+end
 
 figure(12)
 tiledlayout (1,2)
+nexttile
 histogram(resid)
+nexttile
 probplot(resid)
 
 
@@ -194,7 +237,6 @@ function [pxx,omegas] = freqbuild(Pxx,n,f,ndf)
 
 end
 
-
 function [V,identity] = vand(f,t)
         SIN = @(w,t) sin(w*t);
         COS = @(w,t) cos(w*t);
@@ -204,16 +246,17 @@ function [V,identity] = vand(f,t)
         
         fr = f*2*pi;
 
-        V = NaN(numel(t),(2*numel(f)));
-        % V(:,2) = t';
+        V = ones(numel(t),(2*numel(f)+2));
+        V(:,2) = t';
         identity = NaN(size(V,2),1);
         for ii = 1:numel(f)
            S = SIN(fr(ii),t');
            C = COS(fr(ii),t');
-           V(:,(2*ii - 1 :2*ii)) = [S, C];
+           V(:,(2*ii +1 :2*ii+2)) = [S, C];
            identity((2*ii-1:2*ii)) = [f(ii);f(ii)];
         end
         
         
 
 end
+
